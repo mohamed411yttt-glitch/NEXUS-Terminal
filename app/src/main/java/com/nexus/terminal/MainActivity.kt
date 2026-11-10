@@ -1,6 +1,7 @@
 package com.nexus.terminal
 
-import android.app.Activity
+import java.io.File
+
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
@@ -23,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -30,9 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import com.nexus.terminal.engine.NexusCore
 import kotlinx.coroutines.delay
-import java.io.File
-import java.util.concurrent.TimeUnit
 
 private val Black = Color(0xFF000000)
 private val Green = Color(0xFF39FF88)
@@ -41,7 +42,20 @@ private val White = Color(0xFFE5F5EC)
 private val Grey = Color(0xFF82918A)
 private val Red = Color(0xFFFF5364)
 
+private fun formatPromptPath(path: String, homePath: String): String {
+    val home = File(homePath).canonicalFile
+    val current = File(path).canonicalFile
+    return when {
+        current.path == home.path -> "~"
+        current.path.startsWith(home.path + File.separator) ->
+            "~/" + current.path.removePrefix(home.path + File.separator)
+        else -> current.path
+    }
+}
+
 class MainActivity : ComponentActivity() {
+    private lateinit var nexusCore: NexusCore
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -54,18 +68,30 @@ class MainActivity : ComponentActivity() {
             View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         )
 
-        val home = File(filesDir, "nexus-home")
-        home.mkdirs()
+        nexusCore = lastCustomNonConfigurationInstance as? NexusCore
+            ?: NexusCore(filesDir)
 
         setContent {
-            NexusApp(home.absolutePath)
+            NexusApp(nexusCore)
         }
+    }
+
+    override fun onRetainCustomNonConfigurationInstance(): Any {
+        return nexusCore
+    }
+
+    override fun onDestroy() {
+        if (isFinishing && ::nexusCore.isInitialized) {
+            nexusCore.shutdown()
+        }
+        super.onDestroy()
     }
 }
 
 @Composable
-private fun NexusApp(homePath: String) {
+private fun NexusApp(core: NexusCore) {
     MaterialTheme(colorScheme = darkColorScheme()) {
+
         var phase by remember { mutableIntStateOf(0) }
         var visibleLines by remember { mutableIntStateOf(0) }
         var glitchTick by remember { mutableIntStateOf(0) }
@@ -99,17 +125,21 @@ private fun NexusApp(homePath: String) {
         }
 
         LaunchedEffect(Unit) {
-            // شاشة سوداء لمدة خمس ثوانٍ
             delay(5000)
 
             phase = 1
 
             bootLines.forEachIndexed { index, _ ->
                 visibleLines = index + 1
+
                 try {
-                    tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 45)
+                    tone?.startTone(
+                        ToneGenerator.TONE_PROP_BEEP,
+                        45
+                    )
                 } catch (_: Exception) {
                 }
+
                 delay(230)
             }
 
@@ -127,7 +157,9 @@ private fun NexusApp(homePath: String) {
 
         when (phase) {
             0 -> Box(
-                Modifier.fillMaxSize().background(Black)
+                Modifier
+                    .fillMaxSize()
+                    .background(Black)
             )
 
             1 -> BootScreen(bootLines.take(visibleLines))
@@ -140,7 +172,9 @@ private fun NexusApp(homePath: String) {
                 )
 
                 Box(
-                    Modifier.fillMaxSize().background(Black),
+                    Modifier
+                        .fillMaxSize()
+                        .background(Black),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -152,7 +186,11 @@ private fun NexusApp(homePath: String) {
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier
                             .offset(
-                                x = if (glitchTick % 2 == 0) (-3).dp else 3.dp
+                                x = if (glitchTick % 2 == 0) {
+                                    (-3).dp
+                                } else {
+                                    3.dp
+                                }
                             )
                             .alpha(alpha)
                     )
@@ -170,7 +208,7 @@ private fun NexusApp(homePath: String) {
                 }
             }
 
-            else -> TerminalScreen(homePath)
+            else -> TerminalScreen(core)
         }
     }
 }
@@ -205,6 +243,7 @@ private fun BootScreen(lines: List<String>) {
         }
 
         Spacer(Modifier.height(12.dp))
+
         Text(
             "________________________",
             color = Green.copy(alpha = 0.5f),
@@ -214,13 +253,20 @@ private fun BootScreen(lines: List<String>) {
 }
 
 @Composable
-private fun TerminalScreen(homePath: String) {
+private fun TerminalScreen(core: NexusCore) {
+
     var input by remember { mutableStateOf("") }
-    var currentDir by remember { mutableStateOf(homePath) }
+    var currentDir by remember {
+        mutableStateOf(
+            core.getActiveSession()?.engine?.currentDirectory
+                ?: core.homeDirectory.absolutePath
+        )
+    }
+
     val history = remember {
         mutableStateListOf(
             "NEXUS TERMINAL",
-            "Android local shell",
+            "NEXUS local command engine",
             "Type 'help' to see available commands.",
             ""
         )
@@ -232,18 +278,24 @@ private fun TerminalScreen(homePath: String) {
         val command = input.trim()
         if (command.isEmpty()) return
 
-        history.add("NEXUS@android:~$ $command")
+        history.add("NEXUS@android:${formatPromptPath(currentDir, core.homeDirectory.absolutePath)}$ $command")
         input = ""
 
-        if (command == "clear") {
-            history.clear()
-            return
-        }
+        try {
+            val result = core.execute(command)
 
-        val result = TerminalEngine.execute(command, currentDir, homePath)
-        currentDir = result.newDirectory
-        if (result.output.isNotEmpty()) {
-            history.addAll(result.output.lines())
+            currentDir = result.currentDirectory
+
+            if (result.clearScreen) {
+                history.clear()
+                return
+            }
+
+            history.addAll(result.output)
+        } catch (error: Exception) {
+            history.add(
+                "ERROR: ${error.message ?: "Command failed."}"
+            )
         }
     }
 
@@ -300,7 +352,10 @@ private fun TerminalScreen(homePath: String) {
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(scroll)
-                .padding(horizontal = 13.dp, vertical = 12.dp)
+                .padding(
+                    horizontal = 13.dp,
+                    vertical = 12.dp
+                )
         ) {
             history.forEach { line ->
                 Text(
@@ -329,11 +384,14 @@ private fun TerminalScreen(homePath: String) {
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
+                .padding(
+                    horizontal = 12.dp,
+                    vertical = 12.dp
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "$ ",
+                "${formatPromptPath(currentDir, core.homeDirectory.absolutePath)} $ ",
                 color = Green,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
@@ -345,7 +403,7 @@ private fun TerminalScreen(homePath: String) {
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(
+                textStyle = TextStyle(
                     color = White,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace
@@ -358,193 +416,6 @@ private fun TerminalScreen(homePath: String) {
                     onDone = { submit() }
                 )
             )
-        }
-    }
-}
-
-private data class TerminalResult(
-    val output: String,
-    val newDirectory: String
-)
-
-private object TerminalEngine {
-
-    fun execute(
-        input: String,
-        currentDir: String,
-        homePath: String
-    ): TerminalResult {
-        var directory = currentDir
-
-        val args = tokenize(input)
-        if (args.isEmpty()) return TerminalResult("", directory)
-
-        val command = args[0]
-        val params = args.drop(1)
-
-        fun result(message: String) =
-            TerminalResult(message, directory)
-
-        fun safeFile(path: String): File? {
-            return try {
-                val base = File(homePath).canonicalFile
-                val file = File(directory, path).canonicalFile
-                if (file.path == base.path ||
-                    file.path.startsWith(base.path + File.separator)
-                ) file else null
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        return try {
-            when (command) {
-                "help" -> result(
-                    """
-Available commands:
-  help       Show this help
-  pwd        Show current directory
-  ls         List files
-  cd         Change directory
-  cat        Read a text file
-  mkdir      Create a directory
-  touch      Create an empty file
-  echo       Print text
-  date       Show date and time
-  whoami     Show current user
-  uname      Show Android kernel information
-  clear      Clear terminal output
-                    """.trimIndent()
-                )
-
-                "pwd" -> result(directory)
-
-                "cd" -> {
-                    val target = params.firstOrNull() ?: homePath
-                    val file = if (target == "~") {
-                        File(homePath)
-                    } else {
-                        safeFile(target)
-                    }
-
-                    if (file == null || !file.isDirectory) {
-                        result("ERROR: Directory not found or access denied.")
-                    } else {
-                        directory = file.canonicalPath
-                        result("")
-                    }
-                }
-
-                "echo" -> result(params.joinToString(" "))
-
-                "mkdir" -> {
-                    val paths = params.filter { !it.startsWith("-") }
-                    if (paths.isEmpty()) return result("ERROR: Specify a directory.")
-
-                    val messages = paths.map { path ->
-                        val file = safeFile(path)
-                        when {
-                            file == null -> "ERROR: Access denied: $path"
-                            file.mkdirs() || file.isDirectory -> "Created: $path"
-                            else -> "ERROR: Could not create: $path"
-                        }
-                    }
-                    result(messages.joinToString("\n"))
-                }
-
-                "touch" -> {
-                    if (params.isEmpty()) return result("ERROR: Specify a filename.")
-
-                    val messages = params.map { path ->
-                        val file = safeFile(path)
-                        when {
-                            file == null -> "ERROR: Access denied: $path"
-                            file.exists() -> "Already exists: $path"
-                            file.parentFile?.exists() == false ->
-                                "ERROR: Parent directory does not exist."
-                            file.createNewFile() -> "Created: $path"
-                            else -> "ERROR: Could not create: $path"
-                        }
-                    }
-                    result(messages.joinToString("\n"))
-                }
-
-                "ls", "cat" -> {
-                    if (command == "cat" && params.isEmpty()) {
-                        return result("ERROR: Specify a filename.")
-                    }
-
-                    val checked = mutableListOf<String>()
-                    for (arg in params) {
-                        if (!arg.startsWith("-") && safeFile(arg) == null) {
-                            return result("ERROR: Access denied: $arg")
-                        }
-                        checked.add(arg)
-                    }
-
-                    runLocalCommand(
-                        listOf(command) + checked,
-                        directory
-                    ).let { result(it) }
-                }
-
-                "date" -> result(
-                    runLocalCommand(listOf("date"), directory)
-                )
-
-                "whoami" -> result(
-                    runLocalCommand(listOf("id", "-un"), directory)
-                )
-
-                "uname" -> result(
-                    runLocalCommand(listOf("uname", "-a"), directory)
-                )
-
-                else -> result(
-                    "ERROR: Command not available: $command\nType 'help' for supported commands."
-                )
-            }
-        } catch (e: Exception) {
-            result("ERROR: ${e.message ?: "Command failed"}")
-        }
-    }
-
-    private fun tokenize(input: String): List<String> {
-        val regex = Regex(""""([^"]*)"|'([^']*)'|(\S+)""")
-        return regex.findAll(input).map {
-            it.groups[1]?.value
-                ?: it.groups[2]?.value
-                ?: it.groups[3]?.value
-                ?: ""
-        }.toList()
-    }
-
-    private fun runLocalCommand(
-        command: List<String>,
-        directory: String
-    ): String {
-        return try {
-            val process = ProcessBuilder(command)
-                .directory(File(directory))
-                .redirectErrorStream(true)
-                .start()
-
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                return "ERROR: Command timed out."
-            }
-
-            val output = process.inputStream.bufferedReader().use {
-                it.readText()
-            }
-
-            if (process.exitValue() == 0) {
-                output.trimEnd()
-            } else {
-                "ERROR: ${output.trim().ifEmpty { "Command failed." }}"
-            }
-        } catch (e: Exception) {
-            "ERROR: ${e.message ?: "Unable to run command"}"
         }
     }
 }
