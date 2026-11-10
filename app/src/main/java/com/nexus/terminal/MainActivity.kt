@@ -1,13 +1,15 @@
 package com.nexus.terminal
 
-import java.io.File
-
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
 import android.view.View
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -21,30 +23,34 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.alpha
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import com.nexus.terminal.engine.NexusCore
 import kotlinx.coroutines.delay
+import java.io.File
+import kotlin.random.Random
 
 private val Black = Color(0xFF000000)
 private val Green = Color(0xFF39FF88)
-private val Purple = Color(0xFFAB70FF)
 private val White = Color(0xFFE5F5EC)
 private val Grey = Color(0xFF82918A)
 private val Red = Color(0xFFFF5364)
+private val DarkRed = Color(0xFF8B0018)
 
 private fun formatPromptPath(path: String, homePath: String): String {
     val home = File(homePath).canonicalFile
     val current = File(path).canonicalFile
+
     return when {
         current.path == home.path -> "~"
         current.path.startsWith(home.path + File.separator) ->
@@ -59,14 +65,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
+
+        // Keep the status bar hidden, but allow the keyboard and navigation
+        // area to appear normally when the user starts typing.
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN
 
         nexusCore = lastCustomNonConfigurationInstance as? NexusCore
             ?: NexusCore(filesDir)
@@ -91,21 +96,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun NexusApp(core: NexusCore) {
     MaterialTheme(colorScheme = darkColorScheme()) {
-
         var phase by remember { mutableIntStateOf(0) }
-        var visibleLines by remember { mutableIntStateOf(0) }
-        var glitchTick by remember { mutableIntStateOf(0) }
-
-        val bootLines = listOf(
-            "[ OK ] Starting NEXUS core",
-            "[ OK ] Checking Android environment",
-            "[ OK ] Loading terminal interface",
-            "[ OK ] Preparing private workspace",
-            "[ OK ] Initializing command engine",
-            "[ OK ] Loading system components",
-            "[ OK ] Establishing local session",
-            "[ OK ] NEXUS kernel interface ready"
-        )
+        var animationFrame by remember { mutableIntStateOf(0) }
 
         val tone = remember {
             try {
@@ -125,88 +117,39 @@ private fun NexusApp(core: NexusCore) {
         }
 
         LaunchedEffect(Unit) {
-            delay(5000)
+            // Fast, continuous falling-code intro.
+            repeat(300) {
+                animationFrame++
+                delay(16)
+            }
 
             phase = 1
 
-            bootLines.forEachIndexed { index, _ ->
-                visibleLines = index + 1
+            // Glitch transition.
+            repeat(26) {
+                animationFrame++
 
-                try {
-                    tone?.startTone(
-                        ToneGenerator.TONE_PROP_BEEP,
-                        45
-                    )
-                } catch (_: Exception) {
+                if (it % 6 == 0) {
+                    try {
+                        tone?.startTone(
+                            ToneGenerator.TONE_PROP_BEEP,
+                            35
+                        )
+                    } catch (_: Exception) {
+                    }
                 }
 
-                delay(230)
+                delay(55)
             }
 
-            delay(450)
+            delay(350)
             phase = 2
-
-            repeat(12) {
-                glitchTick++
-                delay(75)
-            }
-
-            delay(850)
-            phase = 3
         }
 
         when (phase) {
-            0 -> Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Black)
-            )
+            0 -> MatrixRainScreen(animationFrame)
 
-            1 -> BootScreen(bootLines.take(visibleLines))
-
-            2 -> {
-                val alpha by animateFloatAsState(
-                    targetValue = 1f,
-                    animationSpec = tween(250),
-                    label = "glitch"
-                )
-
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "NEXUS",
-                        color = Green,
-                        fontSize = 48.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier
-                            .offset(
-                                x = if (glitchTick % 2 == 0) {
-                                    (-3).dp
-                                } else {
-                                    3.dp
-                                }
-                            )
-                            .alpha(alpha)
-                    )
-
-                    Text(
-                        "SYSTEM INITIALIZING",
-                        color = Purple,
-                        fontSize = 9.sp,
-                        letterSpacing = 3.sp,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(y = 48.dp)
-                            .alpha(alpha)
-                    )
-                }
-            }
+            1 -> NexusGlitchScreen(animationFrame)
 
             else -> TerminalScreen(core)
         }
@@ -214,48 +157,193 @@ private fun NexusApp(core: NexusCore) {
 }
 
 @Composable
-private fun BootScreen(lines: List<String>) {
-    Column(
+private fun MatrixRainScreen(frame: Int) {
+    val symbols = "01ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&<>[]{}+-=*/"
+
+    Canvas(
         modifier = Modifier
             .fillMaxSize()
             .background(Black)
-            .padding(18.dp),
-        verticalArrangement = Arrangement.Bottom
     ) {
-        Text(
-            "NEXUS BOOT SEQUENCE",
-            color = Purple,
-            fontSize = 10.sp,
-            letterSpacing = 2.sp,
-            fontFamily = FontFamily.Monospace
+        val canvas = drawContext.canvas.nativeCanvas
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 15f
+        }
+
+        val columnWidth = 19f
+        val lineHeight = 19f
+        val columns = (size.width / columnWidth).toInt() + 1
+
+        for (column in 0 until columns) {
+            val x = column * columnWidth
+
+            val speed = 3 + (column % 6)
+            val offset = (column * 113) % (size.height.toInt() + 220)
+            val headY = (
+                (frame * speed + offset) %
+                    (size.height.toInt() + 220)
+                ).toFloat()
+
+            for (row in 0..11) {
+                val y = headY - row * lineHeight
+
+                if (y < 0f || y > size.height + 20f) continue
+
+                val seed = frame / 2 + column * 17 + row * 31
+                val character = symbols[
+                    (seed + column + row) % symbols.length
+                ]
+
+                val alpha = (255 - row * 19).coerceIn(25, 255)
+
+                paint.color = if (row == 0) {
+                    android.graphics.Color.argb(255, 220, 255, 230)
+                } else {
+                    android.graphics.Color.argb(alpha, 0, 210, 95)
+                }
+
+                canvas.drawText(
+                    character.toString(),
+                    x,
+                    y,
+                    paint
+                )
+            }
+        }
+
+        // Subtle dark overlay gives the intro a deeper terminal look.
+        paint.color = android.graphics.Color.argb(35, 0, 0, 0)
+        for (y in 0..size.height.toInt() step 4) {
+            canvas.drawRect(
+                0f,
+                y.toFloat(),
+                size.width,
+                y + 1f,
+                paint
+            )
+        }
+    }
+}
+
+@Composable
+private fun NexusGlitchScreen(frame: Int) {
+    val fade by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = tween(300),
+        label = "nexusFade"
+    )
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Black)
+            .alpha(fade)
+    ) {
+        val canvas = drawContext.canvas.nativeCanvas
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(
+                Typeface.MONOSPACE,
+                Typeface.BOLD
+            )
+            textSize = 57f
+            textAlign = Paint.Align.CENTER
+        }
+
+        val glitch = frame % 4
+        val shift = if (glitch % 2 == 0) 8f else -8f
+
+        // Red and cyan displaced layers.
+        paint.color = android.graphics.Color.rgb(0, 110, 125)
+        canvas.drawText(
+            "NEXUS",
+            centerX - shift,
+            centerY,
+            paint
         )
 
-        Spacer(Modifier.height(14.dp))
+        paint.color = android.graphics.Color.rgb(150, 0, 25)
+        canvas.drawText(
+            "NEXUS",
+            centerX + shift,
+            centerY,
+            paint
+        )
 
-        lines.forEachIndexed { index, line ->
-            Text(
-                line,
-                color = if (index == lines.lastIndex) Green else Grey,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(vertical = 3.dp)
+        // Main dark-red title.
+        paint.color = android.graphics.Color.rgb(139, 0, 24)
+        canvas.drawText(
+            "NEXUS",
+            centerX,
+            centerY,
+            paint
+        )
+
+        // Moving horizontal glitch slices.
+        for (slice in 0..5) {
+            val sliceY = centerY - 42f + slice * 15f
+            val offset = if ((frame + slice) % 2 == 0) {
+                13f
+            } else {
+                -11f
+            }
+
+            canvas.save()
+            canvas.clipRect(
+                0f,
+                sliceY,
+                size.width,
+                sliceY + 7f
+            )
+
+            paint.color = android.graphics.Color.rgb(190, 0, 35)
+            canvas.drawText(
+                "NEXUS",
+                centerX + offset,
+                centerY,
+                paint
+            )
+            canvas.restore()
+        }
+
+        // Random horizontal interference.
+        val random = Random(frame)
+        paint.color = android.graphics.Color.rgb(115, 0, 25)
+
+        repeat(15) {
+            val y = random.nextFloat() * size.height
+            val x = random.nextFloat() * size.width
+            val width = random.nextFloat() * 100f + 15f
+
+            canvas.drawRect(
+                x,
+                y,
+                (x + width).coerceAtMost(size.width),
+                y + 2f,
+                paint
             )
         }
 
-        Spacer(Modifier.height(12.dp))
+        paint.textSize = 10f
+        paint.textAlign = Paint.Align.CENTER
+        paint.color = android.graphics.Color.rgb(110, 0, 25)
 
-        Text(
-            "________________________",
-            color = Green.copy(alpha = 0.5f),
-            fontFamily = FontFamily.Monospace
+        canvas.drawText(
+            "SYSTEM INITIALIZING",
+            centerX,
+            centerY + 62f,
+            paint
         )
     }
 }
 
 @Composable
 private fun TerminalScreen(core: NexusCore) {
-
     var input by remember { mutableStateOf("") }
+
     var currentDir by remember {
         mutableStateOf(
             core.getActiveSession()?.engine?.currentDirectory
@@ -278,12 +366,14 @@ private fun TerminalScreen(core: NexusCore) {
         val command = input.trim()
         if (command.isEmpty()) return
 
-        history.add("NEXUS@android:${formatPromptPath(currentDir, core.homeDirectory.absolutePath)}$ $command")
+        history.add(
+            "NEXUS@android:${formatPromptPath(currentDir, core.homeDirectory.absolutePath)}$ $command"
+        )
+
         input = ""
 
         try {
             val result = core.execute(command)
-
             currentDir = result.currentDirectory
 
             if (result.clearScreen) {
@@ -307,6 +397,8 @@ private fun TerminalScreen(core: NexusCore) {
         modifier = Modifier
             .fillMaxSize()
             .background(Black)
+            // Shrink the terminal area when the keyboard appears.
+            .imePadding()
     ) {
         Row(
             modifier = Modifier
@@ -363,7 +455,7 @@ private fun TerminalScreen(core: NexusCore) {
                     color = when {
                         line.startsWith("NEXUS@") -> Green
                         line.startsWith("ERROR:") -> Red
-                        line.startsWith("NEXUS TERMINAL") -> Purple
+                        line.startsWith("NEXUS TERMINAL") -> DarkRed
                         else -> White
                     },
                     fontSize = 12.sp,
@@ -386,7 +478,7 @@ private fun TerminalScreen(core: NexusCore) {
                 .navigationBarsPadding()
                 .padding(
                     horizontal = 12.dp,
-                    vertical = 12.dp
+                    vertical = 10.dp
                 ),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -405,7 +497,7 @@ private fun TerminalScreen(core: NexusCore) {
                 singleLine = true,
                 textStyle = TextStyle(
                     color = White,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     fontFamily = FontFamily.Monospace
                 ),
                 cursorBrush = SolidColor(Green),
